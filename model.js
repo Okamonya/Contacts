@@ -1,5 +1,5 @@
 const { DataTypes, Sequelize } = require('sequelize');
-const sequelize = new Sequelize('contacts', 'root', 'password', {
+const sequelize = new Sequelize('contacts', 'root', 'Wairimu1996', {
   host: 'localhost',
   dialect: 'mysql',
 });
@@ -11,22 +11,9 @@ const Contact = sequelize.define('contacts', {
     autoIncrement: true,
     allowNull: false,
   },
-  firstName: {
-    type: DataTypes.STRING,
+  fullContacts: {
+    type: DataTypes.TEXT,
     allowNull: false,
-  },
-  secondName: {
-    type: DataTypes.STRING,
-    allowNull: false,
-  },
-  thirdName: {
-    type: DataTypes.STRING,
-    allowNull: false,
-  },
-  phoneNumber: {
-    type: DataTypes.STRING,
-    allowNull: false,
-    unique: true,
   },
   createdAt: {
     type: DataTypes.DATE,

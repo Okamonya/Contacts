@@ -1,37 +1,50 @@
 const express = require('express');
 const crypto = require('crypto');
-const Contact = require('./models');
+const Contact = require('./model');
+const { createCipheriv, createDecipheriv, randomBytes } = require('crypto');
+
+const passphrase = 'SecurePassphrase123!';
+
+const key = crypto.scryptSync(passphrase, 'salt', 32).toString('hex');
 
 const app = express();
 app.use(express.json());
 
-// Function to encrypt data
-function encrypt(text) {
-  const cipher = crypto.createCipher('aes-256-cbc', 'your-secret-key');
+function encrypt(text, key) {
+  const iv = randomBytes(16);
+  const cipher = createCipheriv('aes-256-cbc', Buffer.from(key, 'hex'), iv);
   let encrypted = cipher.update(text, 'utf8', 'hex');
   encrypted += cipher.final('hex');
-  return encrypted;
+  return iv.toString('hex') + encrypted;
 }
 
-// Function to decrypt data
-function decrypt(text) {
-  const decipher = crypto.createDecipher('aes-256-cbc', 'your-secret-key');
-  let decrypted = decipher.update(text, 'hex', 'utf8');
+function decrypt(text, key) {
+  if (!text) {
+    return null;
+  }
+  const iv = Buffer.from(text.slice(0, 32), 'hex');
+  const encryptedText = text.slice(32);
+  const decipher = createDecipheriv('aes-256-cbc', Buffer.from(key, 'hex'), iv);
+  let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
   return decrypted;
 }
 
-// Create a new contact
 app.post('/contacts', async (req, res) => {
   try {
     const { firstName, secondName, thirdName, phoneNumber } = req.body;
-    const encryptedPhoneNumber = encrypt(phoneNumber);
 
-    const newContact = await Contact.create({
+    const contact = JSON.stringify({
       firstName,
       secondName,
       thirdName,
-      phoneNumber: encryptedPhoneNumber,
+      phoneNumber,
+    });
+
+    const encryptedContact = encrypt(contact, key);
+
+    const newContact = await Contact.create({
+      fullContacts: encryptedContact,
     });
 
     res.json({ message: 'Contact added', id: newContact.contact_id });
@@ -40,69 +53,97 @@ app.post('/contacts', async (req, res) => {
   }
 });
 
-// Get all contacts
 app.get('/contacts', async (req, res) => {
   try {
     const contacts = await Contact.findAll();
-    const decryptedContacts = contacts.map(contact => ({
-      id: contact.contact_id,
-      firstName: contact.firstName,
-      secondName: contact.secondName,
-      thirdName: contact.thirdName,
-      phoneNumber: decrypt(contact.phoneNumber),
-    }));
+    const decryptedContacts = contacts.map(contact => {
+      const decryptedContact = decrypt(contact.fullContacts, key);
+      const parsedContact = JSON.parse(decryptedContact);
+      parsedContact.id = contact.contact_id;
+      return parsedContact;
+    });
     res.json(decryptedContacts);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Update a contact
+app.get('/contacts/:id', async (req, res) => {
+  const id = req.params.id;
+
+  try {
+    const contact = await Contact.findByPk(id);
+
+    if (!contact) {
+      return res.status(404).json({ error: 'contact not found' });
+    }
+
+    /*   Decrypt the contact details */
+    const decryptedContact = decrypt(contact.fullContacts, key);
+    const parsedContact = JSON.parse(decryptedContact);
+
+    res.json(parsedContact);
+  } catch (error) {
+    console.error('Error fetching contact:', error);
+    res.status(500).json({ error: 'failed to fetch contact' });
+  }
+});
+
+
 app.put('/contacts/:id', async (req, res) => {
+  const id = req.params.id;
+  const { firstName, secondName, thirdName, phoneNumber } = req.body;
+
   try {
-    const id = req.params.id;
-    const { firstName, secondName, thirdName, phoneNumber } = req.body;
-    const encryptedPhoneNumber = encrypt(phoneNumber);
+    const existingContact = await Contact.findByPk(id);
 
-    const [count] = await Contact.update(
-      {
-        firstName,
-        secondName,
-        thirdName,
-        phoneNumber: encryptedPhoneNumber,
-      },
-      {
-        where: { contact_id: id },
-      }
-    );
-
-    if (count === 0) {
-      res.status(404).json({ message: 'Contact not found' });
-    } else {
-      res.json({ message: 'Contact updated', changes: count });
+    if (!existingContact) {
+      return res.status(404).json({ error: 'Contact not found' });
     }
+
+    /*   Decrypt the existing contact details */
+    const decryptedContact = decrypt(existingContact.fullContacts, key);
+    const parsedContact = JSON.parse(decryptedContact);
+
+    /* Update the contact details */
+    parsedContact.firstName = firstName;
+    parsedContact.secondName = secondName;
+    parsedContact.thirdName = thirdName;
+    parsedContact.phoneNumber = phoneNumber;
+
+    /* Encrypt the updated contact details */
+    const updatedContact = encrypt(JSON.stringify(parsedContact), key);
+
+    /* Update the existing contact with the new encrypted details */
+    await existingContact.update({ fullContacts: updatedContact });
+
+    res.json({ message: 'Contact updated', id: id });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error updating contact:', error);
+    res.status(500).json({ error: 'Failed to update contact' });
   }
 });
 
-// Delete a contact
+
 app.delete('/contacts/:id', async (req, res) => {
-  try {
-    const id = req.params.id;
-    const count = await Contact.destroy({
-      where: { contact_id: id },
-    });
+  const id = req.params.id;
 
-    if (count === 0) {
-      res.status(404).json({ message: 'Contact not found' });
-    } else {
-      res.json({ message: 'Contact deleted', changes: count });
+  try {
+    const existingContact = await Contact.findByPk(id);
+
+    if (!existingContact) {
+      return res.status(404).json({ error: 'Contact not found' });
     }
+
+    await existingContact.destroy();
+
+    res.json({ message: 'Contact deleted', id: id });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error deleting contact:', error);
+    res.status(500).json({ error: 'Failed to delete contact' });
   }
 });
+
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
